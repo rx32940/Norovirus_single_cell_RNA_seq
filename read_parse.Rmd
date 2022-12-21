@@ -1,0 +1,1043 @@
+---
+title: "parse_read"
+author: "Rachel Xu"
+date: "10/16/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(Seurat)
+library(SeuratDisk)
+library(ggplot2)
+library(tidyverse)
+library(openxlsx)
+
+```
+
+```{r}
+
+fig_path <- file.path("/scicomp/home-pure/rwo8/workdir/single_cell/parse/output/figures")
+
+table_path <- file.path("/scicomp/home-pure/rwo8/workdir/single_cell/parse/output/tables")
+
+marker_path <- "/scicomp/home-pure/rwo8/workdir/single_cell/cell_markers"
+
+RDS_path <- "/scicomp/home-pure/rwo8/workdir/single_cell/RDS_2"
+
+
+```
+
+
+# NO NEED TO RUN AGAIN: RAW: 1.1/2.1 Object - Read files from DoubletFinder processed
+- H5Seurat objects from RDS directory were obtained after pre-QC filtering and DoubletFinder analysis for each sequenced sample, individually
+```{r}
+
+# parse_files <- list.files(RDS_path, pattern = "MON", full.name = TRUE)
+# 
+# parse_obj <- Reduce(function(x,y) merge(x,y, merge.data=TRUE), lapply(parse_files,LoadH5Seurat))
+# 
+# metadata <- parse_obj@meta.data %>% mutate(is.doublet = mapply(function(x, y){
+#   ifelse("Singlet" %in% c(x, y), "Singlet", "Doublet")
+# }, DF.classifications_0.25_0.07_293, DF.classifications_0.25_0.16_448))
+# 
+# parse_obj@meta.data <- metadata
+# 
+# singlet_cells <- rownames(parse_obj@meta.data[parse_obj@meta.data[,"is.doublet"] == "Singlet",])
+# parse_obj <- subset(parse_obj, cells =singlet_cells)
+# 
+# parse_obj@active.assay <- "RNA"
+# parse_obj@assays$SCT <- NULL
+# 
+# saveRDS(parse_obj, "/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/parse_raw_101722.RDS")
+# 
+# table(parse_obj$dataset)
+```
+
+
+# WORKFLOW #1: Harmony
+#### 1.1 read combined dataset
+```{r}
+
+# raw_obj <- readRDS("/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/parse_raw_101722.RDS")
+# 
+# nig24_cells <- rownames(raw_obj@meta.data[raw_obj@meta.data[,"Sample"] %in% c("NI", "GII4"),])
+# raw_obj_nig24 <- subset(raw_obj, cells =nig24_cells)
+# 
+# saveRDS(raw_obj_nig24, "/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/raw_nig24_111922.RDS")
+
+```
+
+### OPTIONAL: handle dropout contamination - MAGIC
+
+##### 1) normalize raw
+```{r}
+# raw_obj_nig24 <- NormalizeData(raw_obj_nig24)
+# saveRDS(raw_obj_nig24, "/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/raw_nig24_111922_normalized.RDS")
+```
+
+##### 2) run bash script in linux below
+```{bash}
+<!-- conda activate python3 -->
+
+<!-- WORK="/scicomp/home-pure/rwo8/workdir/single_cell/script" -->
+
+<!-- RDS_path="/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS" -->
+<!-- Rscript $WORK/run_magic.r $RDS_path/raw_nig24_111922.RDS $RDS_path/raw_nig24_111922_magic.RDS -->
+
+```
+
+
+#### 1.2 Normalization/Dimensional reduction
+```{r}
+# magic <- "yes"
+# 
+# if(magic == "yes"){
+#   
+#   raw_obj_nig24 <- readRDS("/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/raw_nig24_111922_magic.RDS") # t=12
+#   
+#   raw_obj_nig24@active.assay <- "MAGIC_RNA"
+#   
+#   raw_obj_nig24 <- FindVariableFeatures(raw_obj_nig24)
+#   raw_obj_nig24 <- ScaleData(raw_obj_nig24)
+# }else{
+#   
+#   raw_obj_nig24 <- readRDS("/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/parse_raw_101722.RDS")
+#   
+#   raw_obj_nig24@active.assay <- "RNA"
+#   
+#   raw_obj_nig24 <- NormalizeData(raw_obj_nig24)
+#   raw_obj_nig24 <- FindVariableFeatures(raw_obj_nig24)
+#   raw_obj_nig24 <- ScaleData(raw_obj_nig24)
+# }
+# 
+# 
+# raw_obj_nig24 <- raw_obj_nig24 %>%
+#   RunPCA(verbose = FALSE)
+# 
+# 
+# ElbowPlot(raw_obj_nig24)
+# 
+# raw_obj_nig24 <- raw_obj_nig24 %>%
+#     RunUMAP(reduction = "pca", dims = 1:20, verbose = TRUE,n.components = 2)
+# 
+# 
+# before_plot <- DimPlot(raw_obj_nig24, reduction = "umap", group.by="sample")+
+#   theme(legend.position = "none")
+
+```
+
+#### 1.3 Harmony: integrate cells from different infection
+```{r}
+# library(harmony)
+# 
+# # raw_obj_nig24@meta.data$sample <- as.factor(raw_obj_nig24@meta.data$sample)
+# harmony_obj.1 <-  RunHarmony(raw_obj_nig24, group.by.vars= 'Sample', plot_convergence = TRUE, verbose = T, max.iter.harmony = 50, reference_values="NI")
+# 
+# harmony_obj.1@reductions
+# 
+# harmony_obj.1_embed_1 <- Embeddings(harmony_obj.1, "harmony")
+# 
+# 
+# harmony_obj.1_embed_1[1:10,1:10]
+
+
+
+```
+
+#### 1.4 Run UMAP after Harmony
+```{r}
+
+# harmony_obj.1 <- harmony_obj.1 %>%
+#   RunUMAP(reduction = "harmony", dims = 1:20,  n.components = 2) %>%
+#   FindNeighbors(reduction = "harmony", dims=1:20)
+# 
+# harmony_obj.1 <- harmony_obj.1 %>%
+#   FindClusters(group.singletons = FALSE, algorithm = 3)
+# 
+# 
+# after_plot <- DimPlot(harmony_obj.1, reduction = "umap", group.by = "Sample")
+# cluster_plot <- DimPlot(harmony_obj.1, reduction = "umap", group.by = "seurat_clusters", label = TRUE)+
+#   scale_color_manual(values = c(RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired")))
+# 
+# # # DimPlot(harmony_obj, reduction = "umap", group.by = "sample",dims = c(1,2))
+# # 
+# before_plot|after_plot|cluster_plot
+# # 
+# # saveRDS(harmony_obj.1, "/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/harmony__nig24_102822.RDS")
+
+# saveRDS(harmony_obj.1, "/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/harmony__nig24_magic_111922.RDS")
+
+```
+
+
+# START WORKFLOW #1 HERE
+```{r}
+magic <- "no"
+
+if(magic == "yes"){
+harmony_obj.1 <- readRDS("/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/harmony__nig24_magic_111922.RDS")
+# write.csv(harmony_obj.1@meta.data, file.path(table_path, "ni_g24_harmony_magic_metadata.csv"))
+}else{
+  harmony_obj.1 <- readRDS("/scicomp/home-pure/rwo8/workdir/single_cell/parse/work_RDS/harmony__nig24_102822.RDS")
+  # write.csv(harmony_obj.1@meta.data, file.path(table_path, "ni_g24_harmony_metadata.csv"))
+}
+
+
+
+harmony_obj.1 <- FindVariableFeatures(harmony_obj.1, selection.method = "vst", nfeatures = 2000)
+
+harmony_obj.1@meta.data %>% subset(Sample == "GII4")
+
+top10 <- head(VariableFeatures(harmony_obj.1), 50)
+
+# # plot variable features with and without labels
+# plot1 <- VariableFeaturePlot(harmony_obj.1)
+# plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+# plot2
+
+harmony_obj.1@meta.data$Sample <- factor(harmony_obj.1@meta.data$Sample, levels = c("NI", "GII4"))
+
+```
+
+
+
+
+#### cluster compositions
+```{r}
+markersH <- harmony_obj.1@meta.data
+
+markersH$Sample <- factor(markersH$Sample, levels = c("GII4", "NI"))
+
+ggplot(markersH, aes(x=seurat_clusters, fill=Sample) )+
+  geom_bar(position = "fill")+
+  theme_bw()+
+  labs(x="Seurat clusters", y = "Number of cells")
+
+```
+# 1.5) Find markers
+#### Get Cluster Markers
+- all cells
+- NI only
+```{r}
+# harmony_obj.markers <- FindAllMarkers(harmony_obj.1, only.pos = TRUE)
+# if(magic == "yes"){
+# write.csv(harmony_obj.markers, file = file.path(table_path, "harmony_obj.1_all_cluster_markers_magic.csv"))
+# }else{
+#   write.csv(harmony_obj.markers, file = file.path(table_path, "harmony_obj.1_all_cluster_markers.csv"))
+# }
+```
+
+
+###### Heatmap, top expressed genes for each cluster
+```{r}
+if(magic == "yes"){
+  harmony_obj.markers <- read.csv(file.path(table_path, "harmony_obj.1_all_cluster_markers_magic.csv"))
+}else{
+  
+harmony_obj.markers <- read.csv(file.path(table_path, "harmony_obj.1_all_cluster_markers.csv"))
+}
+harmony_obj.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+tiff("Rplot.tiff", res = 500, width = 6000, height = 6000)
+DoHeatmap(harmony_obj.1, features = top10$gene) + NoLegend()
+dev.off()
+```
+
+## overlapping between cell identities (w vs. w/o MAGIC)
+```{r}
+
+temp <- harmony_obj.1@meta.data
+
+withMagic <- read.csv(file.path(table_path, "ni_g24_harmony_magic_metadata.csv")) %>% dplyr::rename(seurat_clusters_withMagic = seurat_clusters)
+
+unique(withMagic$seurat_clusters)
+noMagic <- read.csv(file.path(table_path, "ni_g24_harmony_metadata.csv")) %>% dplyr::rename(seurat_clusters_noMagic = seurat_clusters) %>% select(X, seurat_clusters_noMagic)
+unique(noMagic$seurat_clusters)
+
+cluster_df <- left_join(withMagic, noMagic, by="X") %>% column_to_rownames("X")
+
+harmony_obj.1@meta.data <- cluster_df
+
+DimPlot(harmony_obj.1, reduction = "umap", group.by = "seurat_clusters_withMagic", label = TRUE)+
+  scale_color_manual(values = c(RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired")))
+
+harmony_obj.1@meta.data <- temp
+
+```
+
+### Get Conserved Markers: write conserved markers of each cluster into excel
+```{r}
+
+
+# 
+# find_conserved_markers <- function(x, magic){
+# 
+#   if(magic == "yes"){
+#     cluster_ls_1 = c(0:8,10:13,15:17,19:23)
+#   }else{
+#     cluster_ls_1 = c(0:10)
+#   }
+#   if(x %in% cluster_ls_1){
+#   single_cluster_markers <- harmony_obj.1 %>%
+#   FindConservedMarkers(ident.1 = x, grouping.var = "Sample")
+# 
+# c <- single_cluster_markers
+# c <- c%>% arrange(desc(NI_avg_log2FC))%>% select("NI_p_val" , "NI_avg_log2FC" ,"NI_pct.1" ,"NI_pct.2" , "NI_p_val_adj","GII4_p_val" , "GII4_avg_log2FC", "GII4_pct.1","GII4_pct.2","GII4_p_val_adj","max_pval", "minimump_p_val" )
+# return(c)
+#   }else{
+#   single_cluster_markers <- harmony_obj.1 %>%
+#   FindMarkers(ident.1 = x)
+#   c <- single_cluster_markers
+#   c %>% arrange(desc(avg_log2FC))
+#   return(c)
+#   }
+# 
+# }
+# 
+# if(magic == "yes"){
+#   
+#   combined_conserved <- lapply(c(0:23),find_conserved_markers, "yes")
+#   names(combined_conserved) <- paste0("cluster", c(0:23))
+#   combined_conserved.1 <- lapply(combined_conserved,rownames_to_column)
+#   
+#   # write.xlsx(combined_conserved.1, file = file.path(table_path, "NI_GII.4_conserved_cluster_markers_magic.xlsx"), overwrite = TRUE)
+# 
+# }else{
+#   combined_conserved <- lapply(c(0:12),find_conserved_markers, "no")
+#   names(combined_conserved) <- paste0("cluster", c(0:12))
+#   combined_conserved.1 <- lapply(combined_conserved,rownames_to_column)
+# 
+#   # write.xlsx(combined_conserved.1, file = file.path(table_path, "NI_GII.4_conserved_cluster_markers.xlsx"))
+# }
+# 
+
+```
+
+```{r}
+read_excel <- function(x){
+  if(magic == "yes"){
+      df <- read.xlsx(file.path(table_path, "NI_GII.4_conserved_cluster_markers_magic.xlsx"),sheet = x)
+  }else{
+  df <- read.xlsx(file.path(table_path, "NI_GII.4_conserved_cluster_markers.xlsx"),sheet = x)
+  }
+  df$cluster <- x -1
+  df
+}
+
+if(magic == "yes"){
+combined_conserved_cluster_ni <- do.call(rbind, lapply(c(1:9,11:14,16:18,20:24), read_excel))
+}else{
+  combined_conserved_cluster_ni <- do.call(rbind, lapply(c(1:11), read_excel)) # 11,12 only have a few ni cells
+}
+
+ni_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"Sample"] == "NI",])
+
+top10_ni <- combined_conserved_cluster_ni %>% group_by(cluster)  %>% slice_max(order_by = NI_avg_log2FC, n = 10)
+
+# heatmap for NI cells only
+DoHeatmap(harmony_obj.1,features = top10_ni$rowname, cells = ni_cells)
+```
+
+##### single cluster marker
+```{r}
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 5)
+
+c5 <- single_cluster_markers
+c5 %>% arrange(desc(NI_avg_log2FC)) %>% select(rowname, starts_with("NI"))
+
+FeaturePlot(harmony_obj.1, features = c("CASC19"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+markersH[markersH["seurat_clusters"] %in% c(6),"anot"] <- "cancer"
+
+
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindConservedMarkers(ident.1 = 9, grouping.var = "Sample")
+
+c9 <- single_cluster_markers
+c9 %>% arrange(desc(avg_log2FC))
+markersH[markersH["seurat_clusters"] %in% c(9),"anot"] <- "tumor"
+
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindConservedMarkers(ident.1 = 10, grouping.var = "Sample")
+
+c10 <- single_cluster_markers
+c10 %>% arrange(desc(NI_avg_log2FC))
+
+
+
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindConservedMarkers(ident.1 = 1, grouping.var = "Sample")
+
+c1 <- single_cluster_markers
+c1 %>% arrange(desc(avg_log2FC))
+
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 11, grouping.var = "Sample")
+
+c11 <- single_cluster_markers
+c11 %>% arrange(desc(avg_log2FC))
+
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 4, grouping.var = "Sample")
+
+c4 <- single_cluster_markers
+c4 %>% arrange(desc(avg_log2FC))
+
+
+FeaturePlot(harmony_obj.1, features = c("OLFM4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("OLFM4"), slot = "data")
+t <- rownames(harmony_obj.1@assays$MAGIC_RNA@scale.data)
+t[t == "LYZ"]
+```
+
+# Cluster 5
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 5)
+
+c5 <- single_cluster_markers%>% mutate(specificity = NI_pct.1 - NI_pct.2)
+c5 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+c5 %>% arrange(desc(specificity))
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 5)
+
+
+c5_all <- single_cluster_markers_all
+c5_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster5
+c5_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 5,])
+c5_cells.obj <- subset(harmony_obj.1, cells =c5_cells)
+
+Idents(c5_cells.obj) <-  c5_cells.obj@meta.data$Sample
+ni_c5_markers <- c5_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c5_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 5 cells
+FeaturePlot(harmony_obj.1, features = c("SLC7A11"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("MAP1B"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("MAP2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("GCLC"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("AKR1C2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("SLC7A5"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("NIBAN1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+FeaturePlot(harmony_obj.1, features = c("TCP11L2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("SLC2A1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+FeaturePlot(harmony_obj.1, features = c("HK2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+
+
+```
+# Cluster 6
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 6)
+
+c6 <- single_cluster_markers
+c6 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 6)
+
+
+c6_all <- single_cluster_markers_all
+c6_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster6
+c6_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 6,])
+c6_cells.obj <- subset(harmony_obj.1, cells =c6_cells)
+
+Idents(c6_cells.obj) <-  c6_cells.obj@meta.data$Sample
+ni_c6_markers <- c6_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c6_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 6 cells
+FeaturePlot(harmony_obj.1, features = c("TOX"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("OSMR"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("ELAPOR2"), min.cutoff='q10', split.by = "Sample",label = TRUE, 
+label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+```
+
+# Cluster 7
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 7)
+
+c7 <- single_cluster_markers
+c7 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 7)
+
+
+c7_all <- single_cluster_markers_all
+c7_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster7
+c7_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 7,])
+c7_cells.obj <- subset(harmony_obj.1, cells =c7_cells)
+
+Idents(c7_cells.obj) <-  c7_cells.obj@meta.data$Sample
+ni_c7_markers <- c7_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c7_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 7 cells
+FeaturePlot(harmony_obj.1, features = c("MXRA5"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("PHLDB2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("DTNA"), min.cutoff='q10', split.by = "Sample",label = TRUE, 
+label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+```
+# Cluster 8
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 8)
+
+c8 <- single_cluster_markers %>% mutate(specificity = NI_pct.1 - NI_pct.2)
+c8 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+c8 %>% arrange(desc(specificity))
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 8)
+
+
+c8_all <- single_cluster_markers_all
+c8_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster8
+c8_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 8,])
+c8_cells.obj <- subset(harmony_obj.1, cells =c8_cells)
+
+Idents(c8_cells.obj) <-  c8_cells.obj@meta.data$Sample
+ni_c8_markers <- c8_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c8_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 8 cells
+FeaturePlot(harmony_obj.1, features = c("CXCL8"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("BIRC3"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("ELAPOR2"), min.cutoff='q10', split.by = "Sample",label = TRUE, 
+label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+```
+# Cluster 9
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 9)
+
+c9 <- single_cluster_markers %>% mutate(specificity = NI_pct.1 - NI_pct.2)
+c9 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+c9 %>% arrange(desc(specificity))
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 9)
+
+
+c9_all <- single_cluster_markers_all
+c9_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster9
+c9_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 9,])
+c9_cells.obj <- subset(harmony_obj.1, cells =c9_cells)
+
+Idents(c9_cells.obj) <-  c9_cells.obj@meta.data$Sample
+ni_c9_markers <- c9_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c9_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 9 cells
+FeaturePlot(harmony_obj.1, features = c("CXCL8"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("BIRC3"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("ELAPOR2"), min.cutoff='q10', split.by = "Sample",label = TRUE, 
+label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+```
+# Cluster 12
+```{r}
+single_cluster_markers <- harmony_obj.1 %>% 
+  FindConservedMarkers(ident.1 = 12, grouping.var = "Sample")
+
+c12 <- single_cluster_markers
+# only GII.4 infected cells in this cluster
+c12 %>% arrange(desc(GII4_avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+
+FeaturePlot(harmony_obj.1, features = c("MKI67"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("TOP2A"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+
+FeaturePlot(harmony_obj.1, features = c("KDM3A"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("PEAK1"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("CENPF"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("ANLN"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("PPARGC1A"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+
+c12_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 12,])
+c12_cells.obj <- subset(harmony_obj.1, cells =c12_cells)
+
+c12_cells.obj <- c12_cells.obj %>%
+  RunUMAP(reduction = "harmony", dims = 1:20,  n.components = 2) %>%
+  FindNeighbors(reduction = "harmony", dims=1:20)
+
+c12_cells.obj <- c12_cells.obj %>%
+  FindClusters(group.singletons = FALSE, algorithm = 3)
+
+c12_cells.obj@reductions
+
+DimPlot(c12_cells.obj, reduction = "umap", group.by = "Sample")
+DimPlot(c12_cells.obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE)+
+  scale_color_manual(values = c(RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired"),RColorBrewer::brewer.pal(12, "Paired")))
+
+c12_subc_0 <- c12_cells.obj %>% 
+  FindMarkers(ident.1 = 0)
+
+c12_subc_0 %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+c12_subc_1 <- c12_cells.obj %>% 
+  FindMarkers(ident.1 = 1)
+
+c12_subc_1 %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+c12_subc_1 <- c12_cells.obj %>% 
+  FindMarkers(ident.1 = 1)
+
+c12_subc_1 %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+c12_subc_2 <- c12_cells.obj %>% 
+  FindMarkers(ident.1 = 2)
+
+c12_subc_2 %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+FeaturePlot(c12_cells.obj, features = c("CENPF"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+
+markersH[markersH["seurat_clusters"] %in% c(12),"anot"] <- "proliferative-GII4"
+
+
+
+```
+
+# Cluster 1
+```{r}
+
+# conserved markers between samples
+single_cluster_markers <- combined_conserved_cluster_ni %>% subset(cluster == 1)
+
+c1 <- single_cluster_markers%>% mutate(specificity = NI_pct.1 - NI_pct.2)
+c1 %>% arrange(desc(NI_avg_log2FC)) #%>% select(starts_with("NI"))
+c1 %>% arrange(desc(specificity))
+# all markers
+single_cluster_markers_all <- harmony_obj.1 %>% 
+  FindMarkers(ident.1 = 1)
+
+
+c1_all <- single_cluster_markers_all
+c1_all %>% arrange(desc(avg_log2FC)) #%>% select(starts_with("NI"))
+
+
+# differential genes between NI and GII4 cells in cluster1
+c1_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"seurat_clusters"] == 1,])
+c1_cells.obj <- subset(harmony_obj.1, cells =c1_cells)
+
+Idents(c1_cells.obj) <-  c1_cells.obj@meta.data$Sample
+ni_c1_markers <- c1_cells.obj %>% 
+  FindMarkers(ident.1 = "NI")
+
+ni_c1_markers %>% arrange(avg_log2FC)
+
+# highly specific in NI cluster 1 cells
+FeaturePlot(harmony_obj.1, features = c("REG4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("VSIG1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("FABP1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("MUCL3"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("SLC22A3"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("SLC7A5"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+
+
+
+```
+
+
+
+
+###### Paneth
+```{r}
+
+FeaturePlot(harmony_obj.1, features = c("LYZ"), min.cutoff='q10',label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")),  split.by = "Sample", keep.scale="feature")
+VlnPlot(harmony_obj.1, features = c("LYZ"),split.by = "sample")
+
+
+FeaturePlot(harmony_obj.1, features = c("MKI67"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("FKBP1A"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("CA4"),split.by = "sample")
+
+
+
+FeaturePlot(harmony_obj.1, features = c("SMOC2"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("REG3A"), min.cutoff='q10',label = TRUE,split.by = "sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+
+markersH[markersH["seurat_clusters"] %in% c(4),"anot"] <- "Paneth"
+```
+
+# proliferative paneth cells
+```{r}
+FeaturePlot(harmony_obj.1, features = c("LYZ"), min.cutoff='q90',label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")),  split.by = "sample")
+VlnPlot(harmony_obj.1, features = c("LYZ"),split.by = "sample")
+
+
+FeaturePlot(harmony_obj.1, features = c("MKI67"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("MKI67"),split.by = "sample")
+
+FeaturePlot(harmony_obj.1, features = c("TOP2A"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("TOP2A"),split.by = "sample")
+
+
+markersH[markersH["seurat_clusters"] %in% c(13),"anot"] <- "proliferative Paneth"
+```
+
+###### EE
+```{r}
+FeaturePlot(harmony_obj.1, features = c("SLC16A7"), min.cutoff='q10',label = TRUE,split.by = "Sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("SLC16A7"), split.by = "Sample")
+
+FeaturePlot(harmony_obj.1, features = c("REG4"), min.cutoff='q10',label = TRUE,split.by = "Sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("REG4"), split.by = "Sample")
+
+FeaturePlot(harmony_obj.1, features = c("CCK"), min.cutoff='q10',label = TRUE,split.by = "Sample", label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("CCK"), split.by = "Sample")
+
+VlnPlot(harmony_obj.1, features = c("CHGA"), split.by = "Sample")
+markersH[markersH["seurat_clusters"] %in% c(1),"anot"] <- "EE-REG4"
+```
+
+###### Goblet
+```{r}
+FeaturePlot(harmony_obj.1, features = c("MUC2"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("MUC2"), split.by = "Sample")
+
+FeaturePlot(harmony_obj.1, features = c("TFF3"), label = TRUE, label.size = 2, split.by = "sample", cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("SPINK4"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("REG4"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+VlnPlot(harmony_obj.1, features = c("MUC2"), split.by = "sample")
+VlnPlot(harmony_obj.1, features = c("CLCA1"), split.by = "sample")
+
+markersH[markersH["seurat_clusters"] %in% c(9),"anot"] <- "Goblet"
+
+```
+
+###### Tuft
+```{r}
+
+
+FeaturePlot(harmony_obj.1, features = c("TRPM5"),split.by = "sample" ,label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"))
+FeaturePlot(harmony_obj.1, features = c("AZGP1"), split.by = "sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"),  keep.scale="all")
+FeaturePlot(harmony_obj.1, features = c("POU2F3"), split.by = "sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"),  keep.scale="all")
+FeaturePlot(harmony_obj.1, features = c("HLA-C"), split.by = "sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"),  keep.scale="feature", min.cutoff = "Q90")
+
+# markersH[markersH["seurat_clusters"] %in% c(8),"anot"] <- "Tuft cells"
+```
+###### AE
+```{r}
+FeaturePlot(harmony_obj.1, features = c("APOA1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("APOA4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("ALPI"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("MTTP"), min.cutoff='q10',label = TRUE, split.by = "Sample",label.size = 2, cols =c("lightgray", RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("APOB"), min.cutoff='q10',label = TRUE, label.size = 2, cols =c("lightgray", RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("FABP1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+FeaturePlot(harmony_obj.1, features = c("SI"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("ALDOB"), min.cutoff='q10',label = TRUE, split.by = "Sample",label.size = 2, cols =c("lightgray", RColorBrewer::brewer.pal(12,"YlOrRd"))) # intermediate
+FeaturePlot(harmony_obj.1, features = c("ANPEP"), min.cutoff='q10',label = TRUE, split.by = "Sample",label.size = 2, cols =c("lightgray", RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+ni_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"Sample"] == "NI",])
+ni_obj <- subset(harmony_obj.1, cells =ni_cells)
+FeaturePlot(ni_obj, features = c("ALPI"), min.cutoff='q10',label = TRUE, split.by = "Sample",label.size = 2, cols =c("lightgray", RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+
+VlnPlot(harmony_obj.1, features = c("ALDOB"), split.by = "Sample")
+
+markersH[markersH["seurat_clusters"] %in% c(10),"anot"] <- "AE-mature"
+markersH[markersH["seurat_clusters"] %in% c(3),"anot"] <- "AE-intermediate/early"
+
+
+```
+
+###### BEST4
+```{r}
+FeaturePlot(harmony_obj.1, features = c("BEST4"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(12,"YlOrRd"))
+
+VlnPlot(harmony_obj.1, features = c("BEST4"), split.by = "sample")
+markersH[markersH["seurat_clusters"] %in% c(7),"anot"] <- "BEST4"
+```
+
+###### Stem
+```{r}
+
+FeaturePlot(harmony_obj.1, features = c("LGR5"),label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"))
+VlnPlot(harmony_obj.1, features = c("LGR5"),split.by = "sample")
+
+FeaturePlot(harmony_obj.1, features = c("SMOC2"),label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"),split.by = "sample")
+VlnPlot(harmony_obj.1, features = c("LGR5"),split.by = "Sample")
+
+
+FeaturePlot(harmony_obj.1, features = c("RGMB"), min.cutoff='q10',split.by = "sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("RGMB"),split.by = "Sample")
+
+harmony_obj.1@meta.data$seurat_clusters
+Idents(harmony_obj.1) <- "seurat_clusters"
+FeaturePlot(harmony_obj.1, features = c("OLFM4"), min.cutoff='q10',split.by = "sample", label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("OLFM4"),split.by = "Sample")
+
+FeaturePlot(harmony_obj.1, features = c("RPS3"), min.cutoff='q10',split.by = "sample", label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("OLFM4"),split.by = "Sample")
+
+
+
+markersH[markersH["seurat_clusters"] %in% c(4),"anot"] <- "Stem"
+```
+
+###### TA
+```{r}
+FeaturePlot(harmony_obj.1, features = c("OLFM4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd"), dim=c(1,2)))
+VlnPlot(harmony_obj.1, features = c("OLFM4"), split.by = "sample")
+
+
+FeaturePlot(harmony_obj.1, features = c("MKI67"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+
+FeaturePlot(harmony_obj.1, features = c("HSPD1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("HSPD1"), split.by = "sample")
+
+FeaturePlot(harmony_obj.1, features = c("TMEM238"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(9,"YlOrRd")))
+VlnPlot(harmony_obj.1, features = c("TMEM238"), split.by = "sample")
+
+FeaturePlot(harmony_obj.1, features = c("HMGB2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"))
+
+FeaturePlot(harmony_obj.1, features = c("TOP2A"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(9,"YlOrRd"))
+FeaturePlot(harmony_obj.1, features = c("UBE2C"), min.cutoff='q10', split.by = "sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(12,"YlOrRd"))
+FeaturePlot(harmony_obj.1, features = c("STMN1"), min.cutoff='q99', split.by = "Sample",label = TRUE, label.size = 2, cols = RColorBrewer::brewer.pal(12,"YlOrRd"))
+
+
+markersH[markersH["seurat_clusters"] %in% c(11, 4, 6),"anot"] <- "TA"
+```
+
+# WORKFLOW #2: MAGIC Cluster
+
+#### Stem and TA
+
+```{r}
+ni_cells <- rownames(harmony_obj.1@meta.data[harmony_obj.1@meta.data[,"Sample"] == "NI",])
+ni_obj <- subset(harmony_obj.1, cells =ni_cells)
+
+```
+
+
+```{r}
+#LGR5
+FeaturePlot(harmony_obj.1, features = c("LGR5"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(ni_obj,features = c("LGR5"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("LGR5"),split.by = "Sample")
+
+#LGR5
+FeaturePlot(harmony_obj.1, features = c("OLFM4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("OLFM4"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("OLFM4"),split.by = "Sample")
+
+
+```
+#Goblet
+```{r}
+
+#MUC2
+FeaturePlot(harmony_obj.1, features = c("MUC2"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("MUC2"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("MUC2"),split.by = "Sample")
+
+
+#RGMB
+FeaturePlot(harmony_obj.1, features = c("RGMB"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("RGMB"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("RGMB"),split.by = "Sample")
+
+#TFF3
+FeaturePlot(harmony_obj.1, features = c("REG4"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("SPINK4"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("SPINK4"),split.by = "Sample")
+
+
+```
+
+#EE
+```{r}
+
+#CHGA
+FeaturePlot(harmony_obj.1, features = c("CHGA"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("CHGA"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("CHGA"),split.by = "Sample")
+
+
+#CHGB
+FeaturePlot(harmony_obj.1, features = c("CHGB"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("CHGB"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("RGMB"),split.by = "Sample")
+
+#FFAR2
+FeaturePlot(harmony_obj.1, features = c("FFAR2"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("FFAR2"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("FFAR2"),split.by = "Sample")
+
+
+```
+
+#Tuft
+```{r}
+
+#DCLK1
+FeaturePlot(harmony_obj.1, features = c("DCLK1"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("DCLK1"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("DCLK1"),split.by = "Sample")
+
+
+#POU2F3
+FeaturePlot(harmony_obj.1, features = c("POU2F3"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("POU2F3"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("POU2F3"),split.by = "Sample")
+
+#TRPM5
+FeaturePlot(harmony_obj.1, features = c("TRPM5"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("TRPM5"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("TRPM5"),split.by = "Sample")
+
+
+```
+
+
+#AE
+```{r}
+
+#ALPI
+FeaturePlot(harmony_obj.1, features = c("ALPI"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("ALPI"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("ALPI"),split.by = "Sample")
+
+
+#FABP1
+FeaturePlot(harmony_obj.1, features = c("FABP1"), min.cutoff='q10', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("FABP1"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("FABP1"),split.by = "Sample")
+
+#SLC26A3
+FeaturePlot(harmony_obj.1, features = c("SLC26A3"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("SLC26A3"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("SLC26A3"),split.by = "Sample")
+
+#SLC26A3
+FeaturePlot(harmony_obj.1, features = c("TMEM37"), min.cutoff='q70', split.by = "Sample",label = TRUE, label.size = 2, cols = c("lightgray",RColorBrewer::brewer.pal(12,"YlOrRd")))
+
+DoHeatmap(harmony_obj.1,features = c("SLC26A3"), slot = "data")
+
+VlnPlot(harmony_obj.1, features = c("TMEM37"),split.by = "Sample")
+
+
+```
